@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>bunilite WebSocket</title></head>
+  <body>
+    <h1>bunilite WebSocket client</h1>
+    <button id="connect">Connect</button>
+    <button id="broadcast" disabled>Send test broadcast</button>
+    <pre id="output"></pre>
+    <script>
+      let socket;
+      const output = document.querySelector("#output");
+      const write = (value) => { output.textContent += `${value}\n`; };
+      document.querySelector("#connect").onclick = () => {
+        socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+        socket.onopen = () => { write("Connected"); document.querySelector("#broadcast").disabled = false; };
+        socket.onmessage = (event) => write(`Received: ${event.data}`);
+        socket.onclose = () => { write("Disconnected"); document.querySelector("#broadcast").disabled = true; };
+      };
+      document.querySelector("#broadcast").onclick = async () => {
+        await fetch("/api/ws/broadcast", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "test", payload: { message: "Hello from bunilite" } }) });
+      };
+    </script>
+  </body>
+</html>
