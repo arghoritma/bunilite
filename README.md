@@ -50,10 +50,11 @@ Do not edit a migration after it has been applied to a shared environment. Creat
 | GET    | `/api/auth/logout`        | End current session (Bearer token)  |
 | GET    | `/api/auth/logout-all`    | End all sessions (Bearer token)     |
 | GET    | `/api/users/profile`      | Read profile (Bearer token)         |
-| POST   | `/api/ws/broadcast`       | Send a message to WebSocket clients |
+| GET    | `/api/events`             | Receive Server-Sent Events           |
+| POST   | `/api/ws/broadcast`       | Send a message to WebSocket and SSE clients |
 | GET    | `/health`                 | Health check                        |
 
-WebSocket clients connect to `ws://localhost:3000/ws`. Visit `/public/ws-client.html` for a browser client.
+WebSocket clients connect to `ws://localhost:3000/ws`; SSE clients connect to `http://localhost:3000/api/events`. Visit `/` for a browser playground that demonstrates REST, WebSocket, and SSE together.
 
 ## Security behavior
 

@@ -1,11 +1,92 @@
 <!doctype html>
 <html lang="en">
-  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>bunilite</title></head>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#08111f">
+    <title>Bunilite Realtime Playground</title>
+    <link rel="stylesheet" href="/public/demo.css">
+  </head>
   <body>
     <main>
-      <h1>bunilite</h1>
-      <p>Bun, TypeScript, and Hono REST API template.</p>
-      <p><a href="/public/ws-client.html">Open the WebSocket broadcast client</a></p>
+      <div class="eyebrow">Bun + Hono + SQLite</div>
+      <h1>One API. Three ways to communicate.</h1>
+      <p class="intro">This local playground connects to the Bunilite REST API, WebSocket server, and Server-Sent Events stream. Send one broadcast to observe the same event arrive over both realtime transports.</p>
+
+      <section class="transport-grid" aria-label="Connection status">
+        <article class="card">
+          <h2>REST API</h2>
+          <p>Request-response endpoints for resources, authentication, and commands.</p>
+          <span class="status connected">Available at /api</span>
+        </article>
+        <article class="card">
+          <h2>WebSocket</h2>
+          <p>Bidirectional socket connection for interactive realtime features.</p>
+          <span class="status" id="ws-status">Disconnected</span>
+        </article>
+        <article class="card">
+          <h2>Server-Sent Events</h2>
+          <p>One-way server event stream with automatic browser reconnection.</p>
+          <span class="status" id="sse-status">Disconnected</span>
+        </article>
+      </section>
+
+      <div class="controls">
+        <button id="connect-ws">Connect WebSocket</button>
+        <button id="connect-sse">Connect SSE</button>
+        <button class="primary" id="broadcast">Send test broadcast</button>
+        <button id="clear-log">Clear log</button>
+      </div>
+
+      <pre class="log" id="log" aria-live="polite">Ready. Connect one or both realtime transports.</pre>
+
+      <p class="api">Broadcast endpoint: <code>POST /api/ws/broadcast</code>. SSE stream: <code>GET /api/events</code>. The broadcast route is intentionally open for this template demo; secure it before public deployment.</p>
     </main>
+    <script>
+      const log = document.querySelector("#log");
+      const wsStatus = document.querySelector("#ws-status");
+      const sseStatus = document.querySelector("#sse-status");
+      let socket;
+      let eventSource;
+
+      function write(source, message) {
+        const time = new Date().toLocaleTimeString();
+        log.textContent += `\n[${time}] ${source}: ${message}`;
+        log.scrollTop = log.scrollHeight;
+      }
+
+      function updateStatus(element, connected, label) {
+        element.classList.toggle("connected", connected);
+        element.textContent = label;
+      }
+
+      document.querySelector("#connect-ws").addEventListener("click", () => {
+        if (socket && socket.readyState === WebSocket.OPEN) return socket.close();
+        socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+        socket.addEventListener("open", () => { updateStatus(wsStatus, true, "Connected"); write("WebSocket", "Connected"); });
+        socket.addEventListener("message", (event) => write("WebSocket", event.data));
+        socket.addEventListener("close", () => { updateStatus(wsStatus, false, "Disconnected"); write("WebSocket", "Disconnected"); });
+        socket.addEventListener("error", () => write("WebSocket", "Connection error"));
+      });
+
+      document.querySelector("#connect-sse").addEventListener("click", () => {
+        if (eventSource) { eventSource.close(); eventSource = undefined; updateStatus(sseStatus, false, "Disconnected"); write("SSE", "Disconnected"); return; }
+        eventSource = new EventSource("/api/events");
+        eventSource.addEventListener("open", () => { updateStatus(sseStatus, true, "Connected"); write("SSE", "Connected"); });
+        eventSource.addEventListener("error", () => { updateStatus(sseStatus, false, "Reconnecting"); write("SSE", "Connection interrupted; browser will retry"); });
+        eventSource.addEventListener("test", (event) => write("SSE", event.data));
+      });
+
+      document.querySelector("#broadcast").addEventListener("click", async () => {
+        const response = await fetch("/api/ws/broadcast", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "test", payload: { message: "Hello from Bunilite", sentAt: new Date().toISOString() } }),
+        });
+        write("REST", response.ok ? "Broadcast sent" : `Broadcast failed (${response.status})`);
+      });
+
+      document.querySelector("#clear-log").addEventListener("click", () => { log.textContent = "Log cleared."; });
+    </script>
   </body>
 </html>

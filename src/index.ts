@@ -2,6 +2,7 @@ import type { ServerWebSocket } from "bun";
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import authRoute from "./routes/auth";
+import sseRoute from "./routes/sse";
 import userRoute from "./routes/user";
 import websocketRoute from "./routes/websocket";
 import { addSocket, removeSocket } from "./services/websocket.service";
@@ -15,6 +16,7 @@ app.use("/public/*", serveStatic({ root: "./" }));
 
 app.get("/health", (c) => c.json({ status: "ok" }));
 app.route("/api", authRoute);
+app.route("/api", sseRoute);
 app.route("/api", userRoute);
 app.route("/api", websocketRoute);
 
