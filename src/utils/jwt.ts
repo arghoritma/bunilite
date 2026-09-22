@@ -1,9 +1,10 @@
 import { SignJWT, jwtVerify } from "jose";
-import type { TokenPayload } from "./types";
+import type { TokenPayload } from "../types";
 
 const encoder = new TextEncoder();
-const accessSecret = encoder.encode(Bun.env.ACCESS_SECRET ?? "development-access-secret-change-me");
-const refreshSecret = encoder.encode(Bun.env.REFRESH_SECRET ?? "development-refresh-secret-change-me");
+
+const accessSecret = encoder.encode(Bun.env.ACCESS_SECRET!);
+const refreshSecret = encoder.encode(Bun.env.REFRESH_SECRET!);
 
 export async function signToken(payload: TokenPayload, expiresIn: string) {
   const secret = payload.type === "access" ? accessSecret : refreshSecret;

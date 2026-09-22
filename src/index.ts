@@ -2,11 +2,18 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import type { ServerWebSocket } from "bun";
 import {
-  authenticate, createUser, isValidEmail, login, logout, logoutAll, refresh,
+  authenticate,
+  createUser,
+  isValidEmail,
+  login,
+  logout,
+  logoutAll,
+  refresh,
 } from "./auth";
-import { connectCache } from "./cache";
-import { db, migrate } from "./db";
+import { connectCache } from "./utils/cache";
+import { db, migrate } from "./configs/db";
 import type { Session, User } from "./types";
+import AuthRoute from "./routes/auth";
 
 const app = new Hono();
 const sockets = new Set<ServerWebSocket<unknown>>();
@@ -19,58 +26,73 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 function validationError(errors: Record<string, string>) {
   return { errors };
 }
-
-app.post("/api/auth/register", async (c) => {
-  const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
-  const name = typeof body.name === "string" ? body.name : "";
-  const email = typeof body.email === "string" ? body.email : "";
-  const password = typeof body.password === "string" ? body.password : "";
-  const errors: Record<string, string> = {};
-  if (!name) errors.name = "name is required";
-  else if (name.trim().length < 3 || name.trim().length > 30) errors.name = "name must be between 3 and 30 characters";
-  if (!email) errors.email = "email is required";
-  else if (!isValidEmail(email)) errors.email = "email format is invalid";
-  if (!password) errors.password = "password is required";
-  else if (password.length < 6 || password.length > 50) errors.password = "password must be between 6 and 50 characters";
-  if (Object.keys(errors).length) return c.json(validationError(errors), 400);
-  const user = await createUser(name, email, password);
-  if (!user) return c.json({ code: "USER_EXISTS", message: "Email is already registered" }, 400);
-  return c.json({
-    code: "REGISTER_SUCCESS", message: "User registered successfully",
-    data: { user: { id: user.id, name: user.name, email: user.email, createdAt: user.created_at } },
-  }, 201);
-});
+app.route("/api", AuthRoute);
 
 app.post("/api/auth/login", async (c) => {
-  const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+  const body = (await c.req.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
   const email = typeof body.email === "string" ? body.email : "";
   const password = typeof body.password === "string" ? body.password : "";
-  const deviceId = typeof body.deviceId === "string" ? body.deviceId : undefined;
+  const deviceId =
+    typeof body.deviceId === "string" ? body.deviceId : undefined;
   const errors: Record<string, string> = {};
   if (!email) errors.email = "email is required";
   else if (!isValidEmail(email)) errors.email = "email format is invalid";
   if (!password) errors.password = "password is required";
   if (Object.keys(errors).length) return c.json(validationError(errors), 400);
   const result = await login(email, password, deviceId, c.req.raw);
-  if (!result) return c.json({ code: "INVALID_CREDENTIALS", message: "Invalid email or password" }, 401);
+  if (!result)
+    return c.json(
+      { code: "INVALID_CREDENTIALS", message: "Invalid email or password" },
+      401,
+    );
   return c.json({
-    code: "LOGIN_SUCCESS", message: "Login successful",
+    code: "LOGIN_SUCCESS",
+    message: "Login successful",
     data: {
-      accessToken: result.accessToken, refreshToken: result.refreshToken,
-      user: { id: result.user.id, name: result.user.name, email: result.user.email },
-      session: { sessionId: result.session.id, deviceId: result.session.device_id, expiresAt: result.session.expired_at },
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      user: {
+        id: result.user.id,
+        name: result.user.name,
+        email: result.user.email,
+      },
+      session: {
+        sessionId: result.session.id,
+        deviceId: result.session.device_id,
+        expiresAt: result.session.expired_at,
+      },
     },
   });
 });
 
 app.post("/api/auth/refresh-token", async (c) => {
-  const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+  const body = (await c.req.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
   if (typeof body.refreshToken !== "string" || !body.refreshToken) {
-    return c.json(validationError({ refreshToken: "refreshToken is required" }), 400);
+    return c.json(
+      validationError({ refreshToken: "refreshToken is required" }),
+      400,
+    );
   }
   const tokens = await refresh(body.refreshToken);
-  if (!tokens) return c.json({ code: "INVALID_REFRESH_TOKEN", message: "Invalid or expired refresh token" }, 401);
-  return c.json({ code: "REFRESH_SUCCESS", message: "Token refreshed successfully", data: tokens });
+  if (!tokens)
+    return c.json(
+      {
+        code: "INVALID_REFRESH_TOKEN",
+        message: "Invalid or expired refresh token",
+      },
+      401,
+    );
+  return c.json({
+    code: "REFRESH_SUCCESS",
+    message: "Token refreshed successfully",
+    data: tokens,
+  });
 });
 
 async function requireUser(request: Request) {
@@ -79,46 +101,97 @@ async function requireUser(request: Request) {
 
 app.get("/api/auth/sessions", async (c) => {
   const user = await requireUser(c.req.raw);
-  if (!user) return c.json({ code: "UNAUTHORIZED", message: "Authentication required" }, 401);
-  const sessions = db.query<Session, [string, string]>("SELECT * FROM user_sessions WHERE user_id = ? AND is_active = 1 AND expired_at > ? ORDER BY last_used_at DESC")
+  if (!user)
+    return c.json(
+      { code: "UNAUTHORIZED", message: "Authentication required" },
+      401,
+    );
+  const sessions = db
+    .query<Session, [string, string]>(
+      "SELECT * FROM user_sessions WHERE user_id = ? AND is_active = 1 AND expired_at > ? ORDER BY last_used_at DESC",
+    )
     .all(user.id, new Date().toISOString())
-    .map((session) => ({ sessionId: session.id, deviceId: session.device_id, ip: session.ip_address, userAgent: session.user_agent, createdAt: session.created_at, expiredAt: session.expired_at }));
-  return c.json({ code: "SUCCESS", message: "Sessions retrieved successfully", data: { sessions } });
+    .map((session) => ({
+      sessionId: session.id,
+      deviceId: session.device_id,
+      ip: session.ip_address,
+      userAgent: session.user_agent,
+      createdAt: session.created_at,
+      expiredAt: session.expired_at,
+    }));
+  return c.json({
+    code: "SUCCESS",
+    message: "Sessions retrieved successfully",
+    data: { sessions },
+  });
 });
 
 app.get("/api/auth/logout", async (c) => {
   const user = await requireUser(c.req.raw);
-  if (!user) return c.json({ code: "UNAUTHORIZED", message: "Authentication required" }, 401);
+  if (!user)
+    return c.json(
+      { code: "UNAUTHORIZED", message: "Authentication required" },
+      401,
+    );
   await logout(user);
   return c.json({ code: "LOGOUT_SUCCESS", message: "Logout successful" });
 });
 
 app.get("/api/auth/logout-all", async (c) => {
   const user = await requireUser(c.req.raw);
-  if (!user) return c.json({ code: "UNAUTHORIZED", message: "Authentication required" }, 401);
+  if (!user)
+    return c.json(
+      { code: "UNAUTHORIZED", message: "Authentication required" },
+      401,
+    );
   await logoutAll(user.id);
-  return c.json({ code: "LOGOUT_ALL_SUCCESS", message: "Logged out from all devices successfully" });
+  return c.json({
+    code: "LOGOUT_ALL_SUCCESS",
+    message: "Logged out from all devices successfully",
+  });
 });
 
 app.get("/api/users/profile", async (c) => {
   const user = await requireUser(c.req.raw);
-  if (!user) return c.json({ code: "UNAUTHORIZED", message: "Authentication required" }, 401);
-  const profile = db.query<Pick<User, "id" | "name" | "email" | "created_at" | "updated_at">, [string]>("SELECT id, name, email, created_at, updated_at FROM users WHERE id = ?").get(user.id);
-  return c.json({ code: "SUCCESS", message: "Profile retrieved successfully", data: { user: profile } });
+  if (!user)
+    return c.json(
+      { code: "UNAUTHORIZED", message: "Authentication required" },
+      401,
+    );
+  const profile = db
+    .query<
+      Pick<User, "id" | "name" | "email" | "created_at" | "updated_at">,
+      [string]
+    >("SELECT id, name, email, created_at, updated_at FROM users WHERE id = ?")
+    .get(user.id);
+  return c.json({
+    code: "SUCCESS",
+    message: "Profile retrieved successfully",
+    data: { user: profile },
+  });
 });
 
 app.post("/api/ws/broadcast", async (c) => {
-  const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
-  if (typeof body.type !== "string" || !body.type) return c.json(validationError({ type: "type is required" }), 400);
+  const body = (await c.req.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  if (typeof body.type !== "string" || !body.type)
+    return c.json(validationError({ type: "type is required" }), 400);
   const message = JSON.stringify({ type: body.type, payload: body.payload });
   for (const socket of sockets) socket.send(message);
   return c.json({ code: "SUCCESS", message: "Broadcast sent" });
 });
 
-app.notFound((c) => c.json({ code: "NOT_FOUND", message: "Route not found" }, 404));
+app.notFound((c) =>
+  c.json({ code: "NOT_FOUND", message: "Route not found" }, 404),
+);
 app.onError((error, c) => {
   console.error(error);
-  return c.json({ code: "INTERNAL_ERROR", message: "An unexpected error occurred" }, 500);
+  return c.json(
+    { code: "INTERNAL_ERROR", message: "An unexpected error occurred" },
+    500,
+  );
 });
 
 migrate();
@@ -128,12 +201,17 @@ const port = Number(Bun.env.PORT ?? 3000);
 Bun.serve({
   port,
   fetch(request, server) {
-    if (new URL(request.url).pathname === "/ws" && server.upgrade(request)) return undefined;
+    if (new URL(request.url).pathname === "/ws" && server.upgrade(request))
+      return undefined;
     return app.fetch(request, { server });
   },
   websocket: {
-    open(socket) { sockets.add(socket); },
-    close(socket) { sockets.delete(socket); },
+    open(socket) {
+      sockets.add(socket);
+    },
+    close(socket) {
+      sockets.delete(socket);
+    },
     message() {},
     idleTimeout: 60,
     maxPayloadLength: 32 * 1024,

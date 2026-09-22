@@ -1,10 +1,15 @@
 import Redis from "ioredis";
-import type { Session } from "./types";
+import type { Session } from "../types";
 
 const url = Bun.env.REDIS_URL;
 const client = url
-  ? new Redis(url, { lazyConnect: true, maxRetriesPerRequest: 1, retryStrategy: () => null })
+  ? new Redis(url, {
+      lazyConnect: true,
+      maxRetriesPerRequest: 1,
+      retryStrategy: () => null,
+    })
   : null;
+
 let available = false;
 
 export async function connectCache() {
@@ -19,9 +24,17 @@ export async function connectCache() {
 
 export async function cacheSession(session: Session) {
   if (!available || !client) return;
-  const ttl = Math.max(1, Math.floor((Date.parse(session.expired_at) - Date.now()) / 1000));
+  const ttl = Math.max(
+    1,
+    Math.floor((Date.parse(session.expired_at) - Date.now()) / 1000),
+  );
   try {
-    await client.set(`session:${session.id}`, JSON.stringify(session), "EX", ttl);
+    await client.set(
+      `session:${session.id}`,
+      JSON.stringify(session),
+      "EX",
+      ttl,
+    );
     await client.sadd(`user_sessions:${session.user_id}`, session.id);
     await client.expire(`user_sessions:${session.user_id}`, ttl);
   } catch {
