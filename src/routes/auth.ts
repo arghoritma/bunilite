@@ -1,33 +1,15 @@
 import { Hono } from "hono";
-import { register } from "../handlers/auth.handler";
+import { getSessions, loginUser, logoutCurrent, logoutEverywhere, refreshToken, register } from "../handlers/auth.handler";
+import { requireAuth } from "../middlewares/auth.middleware";
+import type { AppEnv } from "../types";
 
-const authRoute = async () => {
-  const app = new Hono();
+const authRoute = new Hono<AppEnv>();
 
-  app.post("/auth/register", register);
-};
+authRoute.post("/auth/register", register);
+authRoute.post("/auth/login", loginUser);
+authRoute.post("/auth/refresh-token", refreshToken);
+authRoute.get("/auth/sessions", requireAuth, getSessions);
+authRoute.get("/auth/logout", requireAuth, logoutCurrent);
+authRoute.get("/auth/logout-all", requireAuth, logoutEverywhere);
 
 export default authRoute;
-/*
-
-import { Hono } from "hono";
-import { clearFlash } from "../auth";
-import { noStore } from "../cache";
-import type { AppEnv } from "../inertia-middleware";
-import type { FlashData, User } from "../../shared/types";
-
-export const apiRoutes = () => {
-	const app = new Hono<AppEnv>();
-
-	app.get("/api/session", noStore, (c) => {
-		const user: User | null = c.var.user;
-		const flash: FlashData = c.var.flash;
-		if (c.var.sessionToken) clearFlash(c.var.sessionToken);
-		return c.json({ user, flash });
-	});
-
-	return app;
-};
-
-
-*/

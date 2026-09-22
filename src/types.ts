@@ -30,3 +30,9 @@ export type AuthUser = Pick<User, "id" | "name" | "email"> & {
   sessionId: string;
   deviceId: string;
 };
+
+export type AppEnv = {
+  Variables: {
+    user: AuthUser;
+  };
+};
