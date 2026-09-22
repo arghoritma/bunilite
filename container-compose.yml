@@ -1,12 +1,43 @@
-version: '3.8'
 services:
-  redis:
-    image: redis:latest
-    container_name: redis-bunilite
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bunilite
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      DATABASE_PATH: /app/data/bunilite.sqlite
+      ACCESS_SECRET: ${ACCESS_SECRET:?Set ACCESS_SECRET in .env}
+      REFRESH_SECRET: ${REFRESH_SECRET:?Set REFRESH_SECRET in .env}
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - sqlite_data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["sh", "-c", "bun run migrate:latest && bun run start"]
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/health').then(response => { if (!response.ok) process.exit(1) })"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-bunilite
+    restart: unless-stopped
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
+  sqlite_data:
   redis_data:
