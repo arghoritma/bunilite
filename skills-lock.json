@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "professional-engineering": {
+      "source": "arghoritma/professional-engineering-skill",
+      "sourceType": "github",
+      "skillPath": "skills/professional-engineering/SKILL.md",
+      "computedHash": "72c4f6b466f9138570c4c303b6abb19a99e877329120498f4fc0b659fdd33c5e"
+    }
+  }
+}

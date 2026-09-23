@@ -1,12 +1,20 @@
 import { db } from "../configs/db";
 import type { AuthUser, Session, TokenPayload, User } from "../types";
-import { cacheSession, removeSession, removeUserSessions } from "../utils/cache";
+import {
+  cacheSession,
+  removeSession,
+  removeUserSessions,
+} from "../utils/cache";
 import { signToken, verifyToken } from "../utils/jwt";
 
 const sessionDurationMs = 30 * 24 * 60 * 60 * 1000;
 const now = () => new Date().toISOString();
 
-export async function createUser(name: string, email: string, password: string) {
+export async function createUser(
+  name: string,
+  email: string,
+  password: string,
+) {
   const normalizedEmail = email.trim().toLowerCase();
   const existing = db
     .query<User, [string]>("SELECT * FROM users WHERE email = ?")
@@ -18,7 +26,10 @@ export async function createUser(name: string, email: string, password: string) 
     id: crypto.randomUUID(),
     name: name.trim(),
     email: normalizedEmail,
-    password: await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 }),
+    password: await Bun.password.hash(password, {
+      algorithm: "bcrypt",
+      cost: 10,
+    }),
     created_at: timestamp,
     updated_at: timestamp,
   };
@@ -26,7 +37,14 @@ export async function createUser(name: string, email: string, password: string) 
   try {
     db.query(
       "INSERT INTO users (id, name, email, password, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-    ).run(user.id, user.name, user.email, user.password, user.created_at, user.updated_at);
+    ).run(
+      user.id,
+      user.name,
+      user.email,
+      user.password,
+      user.created_at,
+      user.updated_at,
+    );
     return user;
   } catch (error) {
     if (error instanceof Error && error.message.includes("UNIQUE")) return null;
@@ -43,14 +61,17 @@ export async function login(
   const user = db
     .query<User, [string]>("SELECT * FROM users WHERE email = ?")
     .get(email.trim().toLowerCase());
-  if (!user || !(await Bun.password.verify(password, user.password))) return null;
+  if (!user || !(await Bun.password.verify(password, user.password)))
+    return null;
 
   const timestamp = now();
   const session: Session = {
     id: crypto.randomUUID(),
     user_id: user.id,
     device_id: deviceId || crypto.randomUUID(),
-    ip_address: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown",
+    ip_address:
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+      "unknown",
     user_agent: request.headers.get("user-agent") ?? "unknown",
     is_active: 1,
     created_at: timestamp,
@@ -97,21 +118,32 @@ async function issueTokens(session: Session) {
 
 function activeSession(sessionId: string, userId: string) {
   return db
-    .query<Session, [string, string, string]>(
-      "SELECT * FROM user_sessions WHERE id = ? AND user_id = ? AND is_active = 1 AND expired_at > ?",
-    )
+    .query<
+      Session,
+      [string, string, string]
+    >("SELECT * FROM user_sessions WHERE id = ? AND user_id = ? AND is_active = 1 AND expired_at > ?")
     .get(sessionId, userId, now());
 }
 
-export async function authenticate(header: string | undefined): Promise<AuthUser | null> {
+export async function authenticate(
+  header: string | undefined,
+): Promise<AuthUser | null> {
   if (!header?.startsWith("Bearer ")) return null;
   try {
     const token = await verifyToken(header.slice(7), "access");
     const session = activeSession(token.sessionId, token.userId);
     if (!session || session.device_id !== token.deviceId) return null;
-    const user = db.query<User, [string]>("SELECT * FROM users WHERE id = ?").get(token.userId);
+    const user = db
+      .query<User, [string]>("SELECT * FROM users WHERE id = ?")
+      .get(token.userId);
     return user
-      ? { id: user.id, name: user.name, email: user.email, sessionId: session.id, deviceId: session.device_id }
+      ? {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          sessionId: session.id,
+          deviceId: session.device_id,
+        }
       : null;
   } catch {
     return null;
@@ -124,14 +156,24 @@ export async function refresh(rawToken: string) {
     const session = activeSession(token.sessionId, token.userId);
     if (!session || session.device_id !== token.deviceId) return null;
     const candidates = db
-      .query<{ token_hash: string }, [string, string]>(
-        "SELECT token_hash FROM refresh_tokens WHERE session_id = ? AND revoked = 0 AND expired_at > ? ORDER BY created_at DESC",
-      )
+      .query<
+        { token_hash: string },
+        [string, string]
+      >("SELECT token_hash FROM refresh_tokens WHERE session_id = ? AND revoked = 0 AND expired_at > ? ORDER BY created_at DESC")
       .all(session.id, now());
-    const valid = await Promise.all(candidates.map((candidate) => Bun.password.verify(rawToken, candidate.token_hash)));
+    const valid = await Promise.all(
+      candidates.map((candidate) =>
+        Bun.password.verify(rawToken, candidate.token_hash),
+      ),
+    );
     if (!valid.some(Boolean)) return null;
-    db.query("UPDATE refresh_tokens SET revoked = 1 WHERE session_id = ?").run(session.id);
-    db.query("UPDATE user_sessions SET last_used_at = ? WHERE id = ?").run(now(), session.id);
+    db.query("UPDATE refresh_tokens SET revoked = 1 WHERE session_id = ?").run(
+      session.id,
+    );
+    db.query("UPDATE user_sessions SET last_used_at = ? WHERE id = ?").run(
+      now(),
+      session.id,
+    );
     return issueTokens(session);
   } catch {
     return null;
@@ -140,25 +182,37 @@ export async function refresh(rawToken: string) {
 
 export function listActiveSessions(userId: string) {
   return db
-    .query<Session, [string, string]>(
-      "SELECT * FROM user_sessions WHERE user_id = ? AND is_active = 1 AND expired_at > ? ORDER BY last_used_at DESC",
-    )
+    .query<
+      Session,
+      [string, string]
+    >("SELECT * FROM user_sessions WHERE user_id = ? AND is_active = 1 AND expired_at > ? ORDER BY last_used_at DESC")
     .all(userId, now());
 }
 
 export async function logout(user: AuthUser) {
-  db.query("UPDATE user_sessions SET is_active = 0 WHERE id = ? AND user_id = ?").run(user.sessionId, user.id);
-  db.query("UPDATE refresh_tokens SET revoked = 1 WHERE session_id = ?").run(user.sessionId);
+  db.query(
+    "UPDATE user_sessions SET is_active = 0 WHERE id = ? AND user_id = ?",
+  ).run(user.sessionId, user.id);
+  db.query("UPDATE refresh_tokens SET revoked = 1 WHERE session_id = ?").run(
+    user.sessionId,
+  );
   await removeSession({ id: user.sessionId, user_id: user.id });
 }
 
 export async function logoutAll(userId: string) {
   const sessions = db
-    .query<Session, [string]>("SELECT * FROM user_sessions WHERE user_id = ? AND is_active = 1")
+    .query<
+      Session,
+      [string]
+    >("SELECT * FROM user_sessions WHERE user_id = ? AND is_active = 1")
     .all(userId);
-  db.query("UPDATE user_sessions SET is_active = 0 WHERE user_id = ?").run(userId);
+  db.query("UPDATE user_sessions SET is_active = 0 WHERE user_id = ?").run(
+    userId,
+  );
   for (const session of sessions) {
-    db.query("UPDATE refresh_tokens SET revoked = 1 WHERE session_id = ?").run(session.id);
+    db.query("UPDATE refresh_tokens SET revoked = 1 WHERE session_id = ?").run(
+      session.id,
+    );
   }
   await removeUserSessions(userId);
 }
