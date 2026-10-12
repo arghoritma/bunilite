@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`bunilite` is a backend REST API template built with Bun, TypeScript, Hono, native SQLite (`bun:sqlite`), optional Redis session caching, JWT authentication, Bun WebSockets, and Server-Sent Events (SSE).
+`bunilite` is a backend REST API template built with Bun, TypeScript, Hono, native SQLite (`bun:sqlite`), optional Redis session caching through Bun's native Redis client, JWT authentication, Bun WebSockets, and Server-Sent Events (SSE).
 
 Use this document as the source of truth for extending the backend. Preserve the existing layer boundaries and API response conventions unless a requested change explicitly requires a breaking change.
 
@@ -12,21 +12,22 @@ Use this document as the source of truth for extending the backend. Preserve the
 - Language: TypeScript with `strict` enabled.
 - HTTP framework: Hono.
 - Database: SQLite through `bun:sqlite`; no ORM is used.
-- Cache: Redis through `ioredis`; it is optional.
+- Cache: Redis through Bun's native `RedisClient`; it is optional.
 - JWT: `jose` with HS256.
 
 ```bash
 bun install
 cp .env.example .env
-bun run migrate:latest
+bun run db:migrate
 bun run dev
 
 bun run start
 bun run check
 bun test
-bun run migrate:latest
-bun run migrate:rollback
-bun run migrate:make -- add-posts
+bun run db:migrate
+bun run db:status
+bun run db:rollback
+bun run db:make -- add_posts
 ```
 
 `bun test` runs `bun test tests`, so place new tests under `tests/` with a `.test.ts` suffix.
@@ -57,7 +58,7 @@ src/
   services/                   Domain logic, SQL queries, and integrations
   middlewares/                Reusable Hono middleware
   utils/                      Shared technical helpers
-  migrations/                 Versioned native SQLite schema changes
+  migrations/                 SQL migration runner
   scripts/                    Bun CLI entry points
   types.ts                    Shared database/domain/Hono environment types
 tests/                        Isolated tests, grouped by layer
@@ -73,8 +74,9 @@ src/handlers/     auth.handler.ts, user.handler.ts, websocket.handler.ts, sse.ha
 src/services/     auth.service.ts, user.service.ts, websocket.service.ts, sse.service.ts
 src/middlewares/  auth.middleware.ts
 src/utils/        cache.ts, jwt.ts, validation.ts
-src/migrations/   001_initial_schema.ts, runner.ts, types.ts
+src/migrations/   runner.ts
 src/scripts/      migrate.ts, make-migration.ts
+migrations/       Ordered SQL schema changes
 tests/            migrations/runner.test.ts, utils/validation.test.ts
 ```
 
@@ -158,37 +160,38 @@ Current schema from `001_initial_schema`:
 - `users`: identity, unique normalized email, bcrypt password hash, timestamps.
 - `user_sessions`: device-specific session state, IP/user agent, expiry; references `users`.
 - `refresh_tokens`: bcrypt refresh-token hash, revocation, expiry; references `user_sessions`.
-- `schema_migrations`: applied migration ID, batch, and timestamp.
+- `schema_migrations`: applied migration version, SHA-256 checksum, and timestamp.
 
 Database naming uses snake_case. Public JSON responses normally use camelCase, mapped in handlers.
 
-Migrations are TypeScript files in `src/migrations/`, dynamically loaded by `runner.ts`. No ORM or third-party migration framework is used.
+Migrations are ordered SQL files in `migrations/`, executed by `src/migrations/runner.ts`. No ORM or third-party migration framework is used.
 
 ```bash
-bun run migrate:make -- add-user-avatar
-bun run migrate:latest
-bun run migrate:rollback
+bun run db:make -- add_user_avatar
+bun run db:migrate
+bun run db:status
+bun run db:rollback
 ```
 
-Every migration exports reversible `up` and `down` functions:
+Every migration has explicit reversible `-- up` and `-- down` SQL sections:
 
 ```ts
-import type { Migration } from "./types";
+-- 0003_add_user_avatar
 
-export const up: Migration["up"] = (db) => {
-  db.exec(`ALTER TABLE users ADD COLUMN avatar_url TEXT;`);
-};
+-- up
+ALTER TABLE users ADD COLUMN avatar_url TEXT;
 
-export const down: Migration["down"] = (db) => {
-  db.exec(`ALTER TABLE users DROP COLUMN avatar_url;`);
-};
+-- down
+ALTER TABLE users DROP COLUMN avatar_url;
 ```
 
 Migration rules:
 
-- Run `bun run migrate:latest` before application startup in local, CI, staging, and production. The server never applies migrations automatically.
-- `migrate:latest` applies every pending migration in one transaction and records them as one batch.
-- `migrate:rollback` reverts the complete latest batch in reverse order and in one transaction.
+- Run `bun run db:migrate` before application startup in local, CI, staging, and production. The server never applies migrations automatically.
+- `db:migrate` applies each pending migration in filename order inside its own transaction.
+- `db:rollback` reverts exactly one latest migration in a transaction.
+- Applied migrations store a SHA-256 checksum; the runner refuses to proceed if an applied migration is changed or missing.
+- `db:migrate` and `db:rollback` regenerate `erd.dbml`. Commit the generated diagram with its migration.
 - Never edit, rename, reorder, or delete a migration applied to a shared environment. Create a new migration.
 - Write and test `down` before applying `up`.
 - SQLite supports limited schema changes. For complex changes, create a replacement table, copy/transform data, drop the old table, rename the replacement, and recreate indexes/triggers.
@@ -282,7 +285,7 @@ For schema changes, also apply, verify, roll back, and verify the migration agai
 
 For a new resource such as posts:
 
-1. Create a migration: `bun run migrate:make -- create-posts`.
+1. Create a migration: `bun run db:make -- create_posts`.
 2. Implement and test reversible `up` and `down` SQL.
 3. Add broadly reusable types to `src/types.ts`.
 4. Add `src/services/post.service.ts` for SQL/domain logic.

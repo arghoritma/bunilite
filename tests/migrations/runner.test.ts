@@ -1,14 +1,48 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { migrateLatest, rollbackLatest } from "../../src/migrations/runner";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { migrateLatest, migrationStatus, rollbackLatest } from "../../src/migrations/runner";
 
 const databases: Database[] = [];
+const migrationDirectories: string[] = [];
+
+const initialSchema = `-- 0001_initial_schema
+
+-- up
+CREATE TABLE users (id TEXT PRIMARY KEY);
+CREATE TABLE user_sessions (id TEXT PRIMARY KEY);
+CREATE TABLE refresh_tokens (id TEXT PRIMARY KEY);
+
+-- down
+DROP TABLE refresh_tokens;
+DROP TABLE user_sessions;
+DROP TABLE users;
+`;
+
+const addAvatar = `-- 0002_add_avatar_to_users
+
+-- up
+ALTER TABLE users ADD COLUMN avatar TEXT;
+
+-- down
+ALTER TABLE users DROP COLUMN avatar;
+`;
 
 function createDatabase() {
   const db = new Database(":memory:");
   db.exec("PRAGMA foreign_keys = ON;");
   databases.push(db);
   return db;
+}
+
+function createMigrationDirectory() {
+  const directory = mkdtempSync(join(tmpdir(), "bunilite-migrations-"));
+  writeFileSync(join(directory, "0001_initial_schema.sql"), initialSchema);
+  writeFileSync(join(directory, "0002_add_avatar_to_users.sql"), addAvatar);
+  migrationDirectories.push(directory);
+  return directory;
 }
 
 function tableExists(db: Database, table: string) {
@@ -19,46 +53,62 @@ function tableExists(db: Database, table: string) {
 
 afterEach(() => {
   for (const db of databases.splice(0)) db.close();
+  for (const directory of migrationDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
 describe("migration runner", () => {
-  test("applies pending migrations once and records their batch", async () => {
+  test("applies pending migrations once and records checksums", () => {
     const db = createDatabase();
+    const migrations = createMigrationDirectory();
 
-    expect(await migrateLatest(db)).toBe(1);
+    expect(migrateLatest(db, migrations)).toBe(2);
     expect(tableExists(db, "users")).toBe(true);
     expect(tableExists(db, "user_sessions")).toBe(true);
     expect(tableExists(db, "refresh_tokens")).toBe(true);
-    expect(
-      db.query<{ id: string; batch: number }, []>("SELECT id, batch FROM schema_migrations").all(),
-    ).toEqual([{ id: "001_initial_schema", batch: 1 }]);
+    expect(tableExists(db, "schema_migrations")).toBe(true);
+    expect(db.query<{ version: string; checksum: string }, []>("SELECT version, checksum FROM schema_migrations ORDER BY version").all()).toEqual([
+      expect.objectContaining({ version: "0001_initial_schema.sql", checksum: expect.any(String) }),
+      expect.objectContaining({ version: "0002_add_avatar_to_users.sql", checksum: expect.any(String) }),
+    ]);
 
-    expect(await migrateLatest(db)).toBe(0);
+    expect(migrateLatest(db, migrations)).toBe(0);
   });
 
-  test("rolls back the latest migration batch", async () => {
+  test("rolls back exactly the latest migration", () => {
     const db = createDatabase();
-    await migrateLatest(db);
+    const migrations = createMigrationDirectory();
+    migrateLatest(db, migrations);
 
-    expect(await rollbackLatest(db)).toBe(1);
+    expect(rollbackLatest(db, migrations)).toBe("0002_add_avatar_to_users.sql");
+    expect(db.query<{ name: string }, []>("PRAGMA table_info(users)").all().some((column) => column.name === "avatar")).toBe(false);
+    expect(tableExists(db, "users")).toBe(true);
+    expect(rollbackLatest(db, migrations)).toBe("0001_initial_schema.sql");
     expect(tableExists(db, "users")).toBe(false);
-    expect(tableExists(db, "user_sessions")).toBe(false);
-    expect(tableExists(db, "refresh_tokens")).toBe(false);
-    expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM schema_migrations").get()?.count).toBe(0);
-    expect(await rollbackLatest(db)).toBe(0);
+    expect(rollbackLatest(db, migrations)).toBeNull();
   });
 
-  test("baselines a database created before versioned migrations", async () => {
+  test("upgrades legacy migration metadata without rerunning the schema", () => {
     const db = createDatabase();
-    db.exec(`
-      CREATE TABLE users (id TEXT PRIMARY KEY);
-      CREATE TABLE user_sessions (id TEXT PRIMARY KEY);
-      CREATE TABLE refresh_tokens (id TEXT PRIMARY KEY);
-    `);
+    const migrations = createMigrationDirectory();
+    migrateLatest(db, migrations);
+    db.exec("ALTER TABLE schema_migrations RENAME TO schema_migrations_new");
+    db.exec("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, batch INTEGER NOT NULL, applied_at TEXT NOT NULL)");
+    db.exec("INSERT INTO schema_migrations (id, batch, applied_at) VALUES ('20261001055728_initial_schema', 1, '2026-10-01T00:00:00.000Z')");
+    db.exec("INSERT INTO schema_migrations (id, batch, applied_at) VALUES ('20261001062102_add_avatar_to_users', 1, '2026-10-01T00:00:00.000Z')");
+    db.exec("DROP TABLE schema_migrations_new");
 
-    expect(await migrateLatest(db)).toBe(0);
-    expect(
-      db.query<{ id: string; batch: number }, []>("SELECT id, batch FROM schema_migrations").all(),
-    ).toEqual([{ id: "001_initial_schema", batch: 1 }]);
+    expect(migrateLatest(db, migrations)).toBe(0);
+    expect(migrationStatus(db, migrations)).toEqual([
+      { version: "0001_initial_schema.sql", applied: true, reversible: true },
+      { version: "0002_add_avatar_to_users.sql", applied: true, reversible: true },
+    ]);
+  });
+
+  test("rejects a draft migration containing only comments", () => {
+    const db = createDatabase();
+    const migrations = createMigrationDirectory();
+    writeFileSync(join(migrations, "0003_add_posts.sql"), "-- 0003_add_posts\n\n-- up\n-- Apply schema changes here.\n\n-- down\n-- Revert schema changes here.\n");
+
+    expect(() => migrateLatest(db, migrations)).toThrow("Migration 0003_add_posts.sql must have SQL statements in both up and down sections.");
   });
 });

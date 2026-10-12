@@ -1,12 +1,12 @@
-import Redis from "ioredis";
+import { RedisClient } from "bun";
 import type { Session } from "../types";
 
 const url = Bun.env.REDIS_URL;
 const client = url
-  ? new Redis(url, {
-      lazyConnect: true,
-      maxRetriesPerRequest: 1,
-      retryStrategy: () => null,
+  ? new RedisClient(url, {
+      connectionTimeout: 1_000,
+      maxRetries: 0,
+      enableOfflineQueue: false,
     })
   : null;
 
@@ -18,6 +18,7 @@ export async function connectCache() {
     await client.connect();
     available = true;
   } catch {
+    client.close();
     console.warn("Redis unavailable; continuing without session cache.");
   }
 }
@@ -39,6 +40,7 @@ export async function cacheSession(session: Session) {
     await client.expire(`user_sessions:${session.user_id}`, ttl);
   } catch {
     available = false;
+    client.close();
   }
 }
 
@@ -49,6 +51,7 @@ export async function removeSession(session: Pick<Session, "id" | "user_id">) {
     await client.srem(`user_sessions:${session.user_id}`, session.id);
   } catch {
     available = false;
+    client.close();
   }
 }
 
@@ -56,9 +59,10 @@ export async function removeUserSessions(userId: string) {
   if (!available || !client) return;
   try {
     const ids = await client.smembers(`user_sessions:${userId}`);
-    if (ids.length) await client.del(...ids.map((id) => `session:${id}`));
+    await Promise.all(ids.map((id) => client.del(`session:${id}`)));
     await client.del(`user_sessions:${userId}`);
   } catch {
     available = false;
+    client.close();
   }
 }

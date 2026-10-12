@@ -1,6 +1,6 @@
 # bunilite
 
-Backend REST API template built with **Bun**, **TypeScript**, and **Hono**. optional Redis session caching, JWT authentication, multi-device sessions, refresh-token rotation, and native Bun WebSocket broadcast.
+Backend REST API template built with **Bun**, **TypeScript**, and **Hono**. Optional Redis session caching uses Bun's native `RedisClient`, alongside JWT authentication, multi-device sessions, refresh-token rotation, and native Bun WebSocket broadcast.
 
 ## Requirements
 
@@ -24,16 +24,17 @@ bun run dev     # watch mode
 bun run start   # production server
 bun run check   # TypeScript validation
 bun test        # test suite in tests/
-bun run migrate:latest              # apply pending migrations
-bun run migrate:rollback            # roll back the latest migration batch
-bun run migrate:make -- add-posts   # generate an up/down migration
+bun run db:migrate                  # apply pending migrations
+bun run db:status                   # list applied and pending migrations
+bun run db:rollback                 # roll back the latest migration
+bun run db:make -- add_posts        # generate an up/down migration
 ```
 
 ## Database migrations
 
-Migrations use native `bun:sqlite` and are stored in `src/migrations`. Every migration exports `up` and `down`; applied migrations are tracked in SQLite's `schema_migrations` table.
+Migrations use native `bun:sqlite` and are stored as ordered SQL files in `migrations/`. Every migration has `-- up` and `-- down` sections; applied migrations are tracked with a SHA-256 checksum in SQLite's `schema_migrations` table.
 
-Create a migration with `bun run migrate:make -- <name>`, implement its SQL, then use `bun run migrate:latest`. `migrate:rollback` reverses all migrations applied by the latest `migrate:latest` invocation, in reverse order.
+Create a migration with `bun run db:make -- <lowercase_snake_case_name>`, implement its SQL, then use `bun run db:migrate`. `db:rollback` reverses exactly one latest migration. Migration commands regenerate `erd.dbml`; commit that generated diagram with its migration.
 
 Existing databases created before this migration system are automatically baselined as `001_initial_schema` when the original `users`, `user_sessions`, and `refresh_tokens` tables are present. Their data is preserved.
 
